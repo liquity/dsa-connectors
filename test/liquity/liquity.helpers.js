@@ -21,11 +21,12 @@ const { eth_addr: ETH_ADDRESS } = require("../../scripts/constant/constant");
 
 const LIQUITY_CONNECTOR = "LIQUITY-v1-TEST";
 const LUSD_GAS_COMPENSATION = hre.ethers.utils.parseUnits("200", 18); // 200 LUSD gas compensation repaid after loan repayment
-const LIQUIDATABLE_TROVES_BLOCK_NUMBER = 12478159; // Deterministic block number for tests to run against, if you change this, tests will break.
+const LIQUIDATABLE_TROVES_BLOCK_NUMBER = 12723709; // Deterministic block number for tests to run against, if you change this, tests will break.
 const JUSTIN_SUN_ADDRESS = "0x903d12bf2c57a29f32365917c706ce0e1a84cce3"; // LQTY whale address
 const LIQUIDATABLE_TROVE_ADDRESS = "0xafbeb4cb97f3b08ec2fe07ef0dac15d37013a347"; // Trove which is liquidatable at blockNumber: LIQUIDATABLE_TROVES_BLOCK_NUMBER
 const MAX_GAS = hardhatConfig.networks.hardhat.blockGasLimit; // Maximum gas limit (12000000)
 const INSTADAPP_BASIC_V1_CONNECTOR = "Basic-v1";
+const DAI_ADDRESS = "0x6b175474e89094c44da98b954eedeac495271d0f";
 
 const openTroveSpell = async (
   dsa,
@@ -98,8 +99,12 @@ const sendToken = async (token, amount, from, to) => {
   });
 };
 
-const resetInitialState = async (walletAddress, contracts, isDebug = false) => {
-  const liquity = await deployAndConnect(contracts, isDebug);
+const resetInitialState = async (
+  walletAddress,
+  contracts,
+  blockNumber = LIQUIDATABLE_TROVES_BLOCK_NUMBER
+) => {
+  const liquity = await deployAndConnect(contracts, false, blockNumber);
   const dsa = await buildDSAv2(walletAddress);
 
   return [liquity, dsa];
@@ -119,9 +124,13 @@ const resetHardhatBlockNumber = async (blockNumber) => {
   });
 };
 
-const deployAndConnect = async (contracts, isDebug = false) => {
+const deployAndConnect = async (
+  contracts,
+  isDebug = false,
+  blockNumber = LIQUIDATABLE_TROVES_BLOCK_NUMBER
+) => {
   // Pin Liquity tests to a particular block number to create deterministic state (Ether price etc.)
-  await resetHardhatBlockNumber(LIQUIDATABLE_TROVES_BLOCK_NUMBER);
+  await resetHardhatBlockNumber(blockNumber);
   const liquity = {
     troveManager: null,
     borrowerOperations: null,
@@ -341,4 +350,5 @@ module.exports = {
   MAX_GAS,
   INSTADAPP_BASIC_V1_CONNECTOR,
   ETH_ADDRESS,
+  DAI_ADDRESS,
 };

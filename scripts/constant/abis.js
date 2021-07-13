@@ -8,6 +8,8 @@ module.exports = {
     basic: require("./abi/connectors/basic.json"),
     auth: require("./abi/connectors/auth.json"),
     "INSTAPOOL-A": require("./abi/connectors/instapool.json"),
+    "1INCH-B": require("./abi/connectors/one-proto.json"),
+    "MAKERDAO-A": require("./abi/connectors/maker.json"),
   },
   basic: {
     erc20: require("./abi/basics/erc20.json"),

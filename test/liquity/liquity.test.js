@@ -4,6 +4,7 @@ const { expect } = require("chai");
 // Instadapp deployment and testing helpers
 const buildDSAv2 = require("../../scripts/buildDSAv2");
 const encodeSpells = require("../../scripts/encodeSpells.js");
+const encodeFlashcastData = require("../../scripts/encodeFlashcastData.js");
 
 // Liquity smart contracts
 const contracts = require("./liquity.contracts");
@@ -2701,6 +2702,148 @@ describe("Liquity", () => {
             "LogClaimStakingGains(address,uint256,uint256,uint256,uint256)"
           );
           expect(castLogEvent.eventParams[0]).eq(expectedEventParams);
+        });
+      });
+
+      describe.only("migrateFromMaker()", () => {
+        it("migrates a Maker Vault to a Liquity Trove", async () => {
+          // Start this test from a block where Instadapp's new flash loan contracts exist
+          [liquity, dsa] = await helpers.resetInitialState(
+            userWallet.address,
+            contracts,
+            12696000
+          );
+          const makerResolverv1_1 =
+            "0x3dF605ca85E8d677C8f6E2665EbcdDbd801Ee9f9";
+          const makerResolver = new ethers.Contract(
+            makerResolverv1_1,
+            [
+              "function getVaultById(uint256 id) external view returns (tuple(uint256 id, address owner, string colType, uint256 ink, uint256 art, uint256 debt, uint256 liquidatedCol, uint256 borrowRate, uint256 colPrice, uint256 liquidationRatio, address vaultAddress))",
+            ],
+            ethers.provider
+          );
+          const vaultId = 2203;
+          const vault = await makerResolver.getVaultById(vaultId);
+          const vaultCollateral = vault.ink;
+          const vaultDebt = vault.debt; // vault.art?
+
+          const maxFeePercentage = ethers.utils.parseUnits("0.5", 18); // 0.5% max fee
+          const { upperHint, lowerHint } = await helpers.getTroveInsertionHints(
+            vaultCollateral,
+            vaultDebt,
+            liquity
+          );
+          const borrowAmountId = 1;
+          const openTroveSpell = {
+            connector: helpers.LIQUITY_CONNECTOR,
+            method: "open",
+            args: [
+              vaultCollateral,
+              maxFeePercentage,
+              vaultDebt,
+              upperHint,
+              lowerHint,
+              [0, 0],
+              [0, borrowAmountId],
+            ],
+          };
+
+          const oneInchResolver = new ethers.Contract(
+            "0x40C71A20938ff932beA18F674e73be670eA47ccf",
+            [
+              "function getBuyAmount(address buyAddr, address sellAddr, uint sellAmt, uint slippage, uint distribution, uint disableDexes) public view returns (uint buyAmt, uint unitAmt, uint[] memory distributions)",
+            ],
+            ethers.provider
+          );
+          console.log("CALLING ONE INCH");
+          const swapData = await oneInchResolver.getBuyAmount(
+            helpers.DAI_ADDRESS,
+            contracts.LUSD_TOKEN_ADDRESS,
+            vaultDebt,
+            ethers.utils.parseUnits("0.1", 18),
+            3,
+            0
+          );
+
+          console.log("SWAP", swapData);
+          console.log("BUYAMT", swapData.buyAmt.toString());
+          console.log("BUYAMT", swapData.buyAmt.toString());
+          console.log("UNITAMT", swapData.unitAmt.toString());
+          // console.log(swapData.distributions.map((x) => x.toString()));
+          const swapLusdForDaiSpell = {
+            connector: "1INCH-B",
+            method: "sell",
+            args: [
+              helpers.DAI_ADDRESS,
+              contracts.LUSD_TOKEN_ADDRESS,
+              swapData.buyAmt,
+              swapData.unitAmt,
+              swapData.distributions,
+              0, // disable dexes - false
+              0, // getId
+              0, // setId
+            ],
+          };
+
+          const repayMakerDebtSpell = {
+            connector: "MAKERDAO-A",
+            method: "payback",
+            args: [
+              vaultId,
+              vaultDebt,
+              0, // getId
+              0, // setId
+            ],
+          };
+
+          const withdrawMakerCollateralSpell = {
+            connector: "MAKERDAO-A",
+            method: "withdraw",
+            args: [
+              vaultId,
+              vaultCollateral,
+              0, // getId
+              0, // setId
+            ],
+          };
+
+          const paybackFlashLoanSpell = {
+            connector: "INSTAPOOL-A",
+            method: "flashPayback",
+            args: [helpers.ETH_ADDRESS, vaultCollateral, 0, 0],
+          };
+
+          const encodedSpells = encodeFlashcastData([
+            openTroveSpell,
+            swapLusdForDaiSpell,
+            repayMakerDebtSpell,
+            withdrawMakerCollateralSpell,
+            paybackFlashLoanSpell,
+          ]);
+
+          const flashLoanWithSpells = [
+            {
+              connector: "INSTAPOOL-A",
+              method: "flashBorrowAndCast",
+              args: [
+                helpers.ETH_ADDRESS,
+                vaultCollateral,
+                0, // route 0 = ETH flash loan
+                encodedSpells,
+              ],
+            },
+          ];
+          console.log("performing flash loan...");
+          const flashLoanTx = await dsa
+            .connect(userWallet)
+            .cast(...encodeSpells(flashLoanWithSpells), userWallet.address);
+          console.wait(await flashLoanTx.wait());
+          // console.log("Vault", vault);
+          // console.log(vault.art.toString());
+          // console.log(vault.ink.toString());
+          // console.log(vault.debt.toString());
+
+          expect(makerResolver.address).to.exist;
         });
       });
     });

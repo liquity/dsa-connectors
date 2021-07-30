@@ -2722,11 +2722,12 @@ describe("Liquity", () => {
             ],
             ethers.provider
           );
-          const vaultId = 2203;
+          const vaultId = 21687; //2203;
           const vault = await makerResolver.getVaultById(vaultId);
           const vaultCollateral = vault.ink;
           const vaultDebt = vault.debt; // vault.art?
-
+          console.log("vault collat", vaultCollateral.toString());
+          console.log("vault debt", vaultDebt.toString());
           const maxFeePercentage = ethers.utils.parseUnits("0.5", 18); // 0.5% max fee
           const { upperHint, lowerHint } = await helpers.getTroveInsertionHints(
             vaultCollateral,
@@ -2760,8 +2761,8 @@ describe("Liquity", () => {
             helpers.DAI_ADDRESS,
             contracts.LUSD_TOKEN_ADDRESS,
             vaultDebt,
-            ethers.utils.parseUnits("0.1", 18),
-            3,
+            ethers.utils.parseUnits("1", 16),
+            2,
             0
           );
 
@@ -2776,7 +2777,7 @@ describe("Liquity", () => {
             args: [
               helpers.DAI_ADDRESS,
               contracts.LUSD_TOKEN_ADDRESS,
-              swapData.buyAmt,
+              vaultDebt,
               swapData.unitAmt,
               swapData.distributions,
               0, // disable dexes - false

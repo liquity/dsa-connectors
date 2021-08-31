@@ -69,6 +69,16 @@ const COLL_SURPLUS_ABI = [
   "function getCollateral(address _account) external view returns (uint)",
 ];
 
+const MAKER_RESOLVER_ADDRESS = "0x3dF605ca85E8d677C8f6E2665EbcdDbd801Ee9f9";
+const MAKER_RESOLVER_ABI = [
+  "function getVaultById(uint256 id) external view returns (tuple(uint256 id, address owner, string colType, uint256 ink, uint256 art, uint256 debt, uint256 liquidatedCol, uint256 borrowRate, uint256 colPrice, uint256 liquidationRatio, address vaultAddress))",
+];
+
+const MAKER_CDP_MANAGER_ADDRESS = "0x5ef30b9986345249bc32d8928B7ee64DE9435E39"
+const MAKER_CDP_MANAGER_ABI = [
+  "function give(uint cdp, address dst) public"
+]
+
 module.exports = {
   TROVE_MANAGER_ADDRESS,
   TROVE_MANAGER_ABI,
@@ -92,4 +102,8 @@ module.exports = {
   LQTY_TOKEN_ABI,
   COLL_SURPLUS_ADDRESS,
   COLL_SURPLUS_ABI,
+  MAKER_RESOLVER_ADDRESS,
+  MAKER_RESOLVER_ABI,
+  MAKER_CDP_MANAGER_ADDRESS,
+  MAKER_CDP_MANAGER_ABI,
 };

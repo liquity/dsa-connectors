@@ -4,6 +4,7 @@ const { expect } = require("chai");
 // Instadapp deployment and testing helpers
 const buildDSAv2 = require("../../scripts/buildDSAv2");
 const encodeSpells = require("../../scripts/encodeSpells.js");
+const encodeFlashcastData = require("../../scripts/encodeFlashcastData.js");
 
 // Liquity smart contracts
 const contracts = require("./liquity.contracts");
@@ -34,13 +35,15 @@ describe("Liquity", () => {
     expect(liquity.staking.address).to.exist;
   });
 
-  beforeEach(async () => {
-    // Build a new DSA before each test so we start each test from the same default state
-    dsa = await buildDSAv2(userWallet.address);
-    expect(dsa.address).to.exist;
-  });
 
   describe("Main (Connector)", () => {
+
+    beforeEach(async () => {
+      // Build a new DSA before each test so we start each test from the same default state
+      dsa = await buildDSAv2(userWallet.address);
+      expect(dsa.address).to.exist;
+    });
+
     describe("Trove", () => {
       describe("open()", () => {
         it("opens a Trove", async () => {
@@ -2702,6 +2705,135 @@ describe("Liquity", () => {
           );
           expect(castLogEvent.eventParams[0]).eq(expectedEventParams);
         });
+      });
+    });
+  });
+
+
+  describe("Recipes", () => {
+    describe("migrateFromMaker()", () => {
+      it.only("migrates a Maker Vault to a Liquity Trove", async () => {
+        const vaultId = 24225; // Sample Maker vault, see: https://defiexplore.com/cdp/24225
+
+        // Run this test from a recent-ish blocknumber so that the 1inch off-chain
+        // quote is more accurate
+        [liquity, dsa] = await helpers.resetInitialState(
+          userWallet.address,
+          contracts,
+          13126331
+        );
+        const makerResolver = helpers.getMakerResolver(contracts);
+        const vault = await makerResolver.getVaultById(vaultId);
+        console.log("Vault owner", vault.owner.toString());
+
+        const signer = await helpers.getImpersonatedSigner(vault.owner);        
+        const makerCdpManager = helpers.getMakerCdpManager(contracts);
+        
+        // Transfer vault ownership to our DSA test user
+        // (and send vault owner 1 ETH to cover gas costs)
+        await userWallet.sendTransaction({ to: vault.owner, value: ethers.utils.parseEther("1")});
+        await makerCdpManager.connect(signer).give(vaultId, dsa.address);
+
+        
+        const vaultCollateral = vault.ink;
+        const vaultDebt = vault.art;
+        console.log("Vault collateral", vaultCollateral.toString());
+        console.log("Vault debt", vaultDebt.toString());
+        
+        const maxFeePercentage = ethers.utils.parseUnits("0.5", 18); // 0.5% max fee
+        const { upperHint, lowerHint } = await helpers.getTroveInsertionHints(
+          vaultCollateral,
+          vaultDebt,
+          liquity
+        );
+        const openTroveSpell = {
+          connector: helpers.LIQUITY_CONNECTOR,
+          method: "open",
+          args: [
+            vaultCollateral,
+            maxFeePercentage,
+            vaultDebt,
+            upperHint,
+            lowerHint,
+            [0, 0],
+            [0, 0],
+          ],
+        };
+
+        const lusdSwapDetails = await helpers.fetch1inchQuote(
+          contracts.LUSD_TOKEN_ADDRESS,
+          helpers.DAI_ADDRESS,
+          vaultDebt,
+          dsa.address
+        );
+
+        const swapLusdForDaiSpell = {
+          connector: "1INCH-A",
+          method: "sell",
+          args: [
+            helpers.DAI_ADDRESS,
+            contracts.LUSD_TOKEN_ADDRESS,
+            vaultDebt,
+            lusdSwapDetails.unitAmount,
+            lusdSwapDetails.calldata,
+            0, // setid
+          ],
+        };
+
+        const repayMakerDebtSpell = {
+          connector: "MAKERDAO-A",
+          method: "payback",
+          args: [
+            vaultId,
+            vaultDebt,
+            0, // getId
+            0, // setId
+          ],
+        };
+
+        const withdrawMakerCollateralSpell = {
+          connector: "MAKERDAO-A",
+          method: "withdraw",
+          args: [
+            vaultId,
+            vaultCollateral,
+            0, // getId
+            0, // setId
+          ],
+        };
+
+        const paybackFlashLoanSpell = {
+          connector: "INSTAPOOL-A",
+          method: "flashPayback",
+          args: [helpers.ETH_ADDRESS, vaultCollateral, 0, 0],
+        };
+
+        const encodedSpells = encodeFlashcastData([
+          openTroveSpell,
+          swapLusdForDaiSpell,
+          repayMakerDebtSpell,
+          withdrawMakerCollateralSpell,
+          paybackFlashLoanSpell,
+        ]);
+
+        const flashLoanWithSpells = [
+          {
+            connector: "INSTAPOOL-A",
+            method: "flashBorrowAndCast",
+            args: [
+              helpers.ETH_ADDRESS,
+              vaultCollateral,
+              0, // route 0 = ETH flash loan
+              encodedSpells,
+            ],
+          },
+        ];
+        console.log("Performing flash loan...");
+        const flashLoanTx = await dsa
+          .connect(userWallet)
+          .cast(...encodeSpells(flashLoanWithSpells), userWallet.address);
+
+        console.log(await flashLoanTx.connect(userWallet).wait());
       });
     });
   });

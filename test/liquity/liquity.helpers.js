@@ -1,4 +1,5 @@
 const hre = require("hardhat");
+const fetch = require("node-fetch");
 const hardhatConfig = require("../../hardhat.config");
 
 // Instadapp deployment and testing helpers
@@ -14,18 +15,19 @@ const instadappAbi = require("../../scripts/constant/abis");
 // Instadapp Liquity Connector artifacts
 const connectV2LiquityArtifacts = require("../../artifacts/contracts/mainnet/connectors/liquity/main.sol/ConnectV2Liquity.json");
 const connectV2BasicV1Artifacts = require("../../artifacts/contracts/mainnet/connectors/basic/main.sol/ConnectV2Basic.json");
-const { ethers } = require("hardhat");
+const { ethers } = hre;
 
 // Instadapp uses a fake address to represent native ETH
 const { eth_addr: ETH_ADDRESS } = require("../../scripts/constant/constant");
 
 const LIQUITY_CONNECTOR = "LIQUITY-v1-TEST";
-const LUSD_GAS_COMPENSATION = hre.ethers.utils.parseUnits("200", 18); // 200 LUSD gas compensation repaid after loan repayment
-const LIQUIDATABLE_TROVES_BLOCK_NUMBER = 12478159; // Deterministic block number for tests to run against, if you change this, tests will break.
+const LUSD_GAS_COMPENSATION = ethers.utils.parseUnits("200", 18); // 200 LUSD gas compensation repaid after loan repayment
+const LIQUIDATABLE_TROVES_BLOCK_NUMBER = 12723709; // Deterministic block number for tests to run against, if you change this, tests will break.
 const JUSTIN_SUN_ADDRESS = "0x903d12bf2c57a29f32365917c706ce0e1a84cce3"; // LQTY whale address
 const LIQUIDATABLE_TROVE_ADDRESS = "0xafbeb4cb97f3b08ec2fe07ef0dac15d37013a347"; // Trove which is liquidatable at blockNumber: LIQUIDATABLE_TROVES_BLOCK_NUMBER
 const MAX_GAS = hardhatConfig.networks.hardhat.blockGasLimit; // Maximum gas limit (12000000)
 const INSTADAPP_BASIC_V1_CONNECTOR = "Basic-v1";
+const DAI_ADDRESS = "0x6b175474e89094c44da98b954eedeac495271d0f";
 
 const openTroveSpell = async (
   dsa,
@@ -66,10 +68,10 @@ const createDsaTrove = async (
   dsa,
   signer,
   liquity,
-  depositAmount = hre.ethers.utils.parseEther("5"),
-  borrowAmount = hre.ethers.utils.parseUnits("2000", 18)
+  depositAmount = ethers.utils.parseEther("5"),
+  borrowAmount = ethers.utils.parseUnits("2000", 18)
 ) => {
-  const maxFeePercentage = hre.ethers.utils.parseUnits("0.5", 18); // 0.5% max fee
+  const maxFeePercentage = ethers.utils.parseUnits("0.5", 18); // 0.5% max fee
   const { upperHint, lowerHint } = await getTroveInsertionHints(
     depositAmount,
     borrowAmount,
@@ -86,22 +88,33 @@ const createDsaTrove = async (
   );
 };
 
+const getImpersonatedSigner = async (address) => {
+  await hre.network.provider.request({
+    method: "hardhat_impersonateAccount",
+    params: [address],
+  });
+  return await ethers.provider.getSigner(address);
+}
+
 const sendToken = async (token, amount, from, to) => {
   await hre.network.provider.request({
     method: "hardhat_impersonateAccount",
     params: [from],
   });
-  const signer = await hre.ethers.provider.getSigner(from);
+  const signer = await ethers.provider.getSigner(from);
 
   return await token.connect(signer).transfer(to, amount, {
     gasPrice: 0,
   });
 };
 
-const resetInitialState = async (walletAddress, contracts, isDebug = false) => {
-  const liquity = await deployAndConnect(contracts, isDebug);
+const resetInitialState = async (
+  walletAddress,
+  contracts,
+  blockNumber = LIQUIDATABLE_TROVES_BLOCK_NUMBER
+) => {
+  const liquity = await deployAndConnect(contracts, false, blockNumber ?? undefined);
   const dsa = await buildDSAv2(walletAddress);
-
   return [liquity, dsa];
 };
 
@@ -119,9 +132,13 @@ const resetHardhatBlockNumber = async (blockNumber) => {
   });
 };
 
-const deployAndConnect = async (contracts, isDebug = false) => {
+const deployAndConnect = async (
+  contracts,
+  isDebug = false,
+  blockNumber = LIQUIDATABLE_TROVES_BLOCK_NUMBER
+) => {
   // Pin Liquity tests to a particular block number to create deterministic state (Ether price etc.)
-  await resetHardhatBlockNumber(LIQUIDATABLE_TROVES_BLOCK_NUMBER);
+  await resetHardhatBlockNumber(blockNumber);
   const liquity = {
     troveManager: null,
     borrowerOperations: null,
@@ -326,6 +343,46 @@ const redeem = async (amount, from, wallet, liquity) => {
     );
 };
 
+const getMakerResolver = contracts => new ethers.Contract(
+  contracts.MAKER_RESOLVER_ADDRESS,
+  contracts.MAKER_RESOLVER_ABI,
+  ethers.provider
+)
+
+const getMakerCdpManager = contracts => new ethers.Contract(
+  contracts.MAKER_CDP_MANAGER_ADDRESS,
+  contracts.MAKER_CDP_MANAGER_ABI,
+  ethers.provider
+);
+
+// Converts (x * 1e18) to x
+const decimalify = (num, decimals) => ethers.BigNumber.from(num.toString()).div((10 ** decimals).toString());
+
+const fetch1inchQuote = async (from, to, sellAmount, sellerAddress) => {
+  const params = new URLSearchParams({
+    fromTokenAddress: from.toLowerCase(),
+    toTokenAddress: to.toLowerCase(),
+    amount: sellAmount,
+    fromAddress: sellerAddress,
+    slippage: 1,
+    disableEstimate: true,
+  });
+  console.log("Getting swap quote from 1inch..", `https://api.1inch.exchange/v3.0/1/swap?${params}`);
+ 
+  const { fromToken, toToken, toTokenAmount: buyAmount, tx: { data: calldata } } = await fetch(`https://api.1inch.exchange/v3.0/1/swap?${params}`).then(response => response.json());
+  const unitAmount = decimalify(buyAmount, toToken.decimals).div(decimalify(sellAmount, fromToken.decimals)).mul(ethers.BigNumber.from(1e18.toString()));
+  
+  console.log({fromToken, toToken, buyAmount })
+  console.log("sellAmount", sellAmount.toString(), decimalify(sellAmount, 18).toString());
+  console.log("buyAmount", buyAmount, decimalify(buyAmount, toToken.decimals).toString());
+  console.log("unitAmount", unitAmount.toString());
+  
+  return {
+    unitAmount,
+    calldata
+  }
+}
+
 module.exports = {
   deployAndConnect,
   resetInitialState,
@@ -334,6 +391,10 @@ module.exports = {
   getTroveInsertionHints,
   getRedemptionHints,
   redeem,
+  getMakerResolver,
+  getImpersonatedSigner,
+  getMakerCdpManager,
+  fetch1inchQuote,
   LIQUITY_CONNECTOR,
   LUSD_GAS_COMPENSATION,
   JUSTIN_SUN_ADDRESS,
@@ -341,4 +402,5 @@ module.exports = {
   MAX_GAS,
   INSTADAPP_BASIC_V1_CONNECTOR,
   ETH_ADDRESS,
+  DAI_ADDRESS,
 };
